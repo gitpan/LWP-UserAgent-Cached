@@ -2,16 +2,30 @@
 
 use strict;
 use Test::More;
-use Test::Mock::LWP::Dispatch;
 use HTTP::Response;
 use HTTP::Request;
 use Digest::MD5;
 use LWP::UserAgent::Cached;
-use File::Temp qw/tempdir/;
+
+eval {
+	require File::Temp;
+	File::Temp->import('tempdir');
+};
+if ($@) {
+	plan skip_all => 'File::Temp not installed';
+}
+
+eval {
+	require Test::Mock::LWP::Dispatch;
+};
+if ($@) {
+	plan skip_all => 'Test::Mock::LWP::Dispatch not installed';
+}
 
 my $cache_dir = eval {
 	tempdir(CLEANUP => 1)
 };
+
 
 unless ($cache_dir) {
 	plan skip_all => "Сan't create temp dir";
@@ -50,6 +64,21 @@ $ua->map('http://perl.org', HTTP::Response->new(200, 'OK', [], 'Perl there'));
 $resp = $ua->get('http://perl.org');
 is($resp->code, 200, 'Nocache code');
 ok(index($resp->content, 'Perl there')!=-1, 'Nocache content') or diag 'Content: ', $resp->content;
+$ua->nocache(undef);
+
+# recache test
+$ua->recache(sub {
+	my ($resp, $path) = @_;
+	isa_ok($resp, 'HTTP::Response');
+	ok(-e $path, 'Cached file exists') or diag "Path: $path";
+	1;
+});
+$mid = $ua->map('http://perlmonks.org', HTTP::Response->new(407));
+$ua->get('http://perlmonks.org');
+$ua->unmap($mid);
+$ua->map('http://perlmonks.org', HTTP::Response->new(200));
+is($ua->get('http://perlmonks.org')->code, 200, 'Recached');
+$ua->recache(undef);
 
 # uncache test
 $mid = $ua->map('http://metacpan.org', HTTP::Response->new(200));
