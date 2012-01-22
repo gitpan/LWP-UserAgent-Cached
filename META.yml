@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               LWP-UserAgent-Cached
-version:            0.02
+version:            0.03
 abstract:           LWP::UserAgent with simple caching mechanism
 author:
     - Oleg G <oleg@cpan.org>

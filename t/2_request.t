@@ -46,6 +46,7 @@ $response->request(HTTP::Request->new(GET => 'http://yahoo.com'));
 $mid = $ua->map('http://yahoo.com', $response);
 my $y_mid = $ua->map('http://www.yahoo.com/', HTTP::Response->new(200, 'Ok', ['Set-Cookie' => 'lwp=true; cached=yes'], 'This is a test'));
 $ua->get('http://yahoo.com'); # make cache
+is(scalar($ua->last_cached), 2, '@last_cached length = 2 on redirect');
 $ua->unmap($mid);
 $ua->cookie_jar->clear();
 my $resp = $ua->get('http://yahoo.com');
@@ -53,8 +54,8 @@ is($resp->code, 200, 'Cached response with redirect');
 ok(index($resp->content, 'This is a test')!=-1, 'Cached response content') or diag "Content: ", $resp->content;
 ok($ua->cookie_jar->as_string =~ /^(?=.*?lwp=true).*?cached=yes/, 'Cookies from the cache') or diag "Cookies: ", $ua->cookie_jar->as_string;
 
-# nocache test
-$ua->nocache(sub {
+# nocache_if test
+$ua->nocache_if(sub {
 	$_[0]->code > 399
 });
 $mid = $ua->map('http://perl.org', HTTP::Response->new(403, 'Forbbidden'));
@@ -64,10 +65,10 @@ $ua->map('http://perl.org', HTTP::Response->new(200, 'OK', [], 'Perl there'));
 $resp = $ua->get('http://perl.org');
 is($resp->code, 200, 'Nocache code');
 ok(index($resp->content, 'Perl there')!=-1, 'Nocache content') or diag 'Content: ', $resp->content;
-$ua->nocache(undef);
+$ua->nocache_if(undef);
 
-# recache test
-$ua->recache(sub {
+# recache_if test
+$ua->recache_if(sub {
 	my ($resp, $path) = @_;
 	isa_ok($resp, 'HTTP::Response');
 	ok(-e $path, 'Cached file exists') or diag "Path: $path";
@@ -78,7 +79,7 @@ $ua->get('http://perlmonks.org');
 $ua->unmap($mid);
 $ua->map('http://perlmonks.org', HTTP::Response->new(200));
 is($ua->get('http://perlmonks.org')->code, 200, 'Recached');
-$ua->recache(undef);
+$ua->recache_if(undef);
 
 # uncache test
 $mid = $ua->map('http://metacpan.org', HTTP::Response->new(200));
@@ -88,26 +89,64 @@ $ua->unmap($mid);
 $ua->map('http://metacpan.org', HTTP::Response->new(503));
 is($ua->get('http://metacpan.org')->code, 503, 'Uncache last response');
 
-#collision test
+# collision test
 $ua->cookie_jar->clear();
 $resp = $ua->get('http://yahoo.com');
 $ua->cookie_jar->clear();
-my $hash = Digest::MD5::md5_hex( $resp->request->as_string );
-open FH, '>:raw', "$cache_dir/$hash";
+my $cache_name = $ua->_get_cache_name($resp->request);
+open FH, '>:raw', $cache_name;
 print FH "http://google.com\nHTTP/1.1 200 OK\n";
 close FH;
 $ua->get('http://yahoo.com');
-ok(-e "$cache_dir/$hash-001", "Collision detected");
+ok(-e "$cache_name-001", "Collision detected");
 
-open FH, '>:raw', "$cache_dir/$hash-001";
+open FH, '>:raw', "$cache_name-001";
 print FH "http://google.com\nHTTP/1.1 200 OK\n";
 close FH;
 $ua->cookie_jar->clear();
 $ua->get('http://yahoo.com');
-ok(-e "$cache_dir/$hash-001", "Double collision detected");
+ok(-e "$cache_name-002", "Double collision detected");
 
 $ua->unmap($y_mid);
 $ua->map('http://www.yahoo.com/', HTTP::Response->new(404));
 is($ua->get('http://yahoo.com')->code, 200, 'Cached response (collision list)');
+
+# cache name specification test
+$mid = $ua->map('http://perl.com', HTTP::Response->new(200));
+$ua->agent('Internet-Explorer');
+$ua->get('http://perl.com');
+$ua->post('http://perl.com', ['q' => 'perl6', 'w' => 'now']);
+$ua->unmap($mid);
+$mid = $ua->map('http://perl.com', HTTP::Response->new(500));
+$ua->cachename_spec({
+	'User-Agent' => 'Internet-Explorer',
+	'Accept' => undef
+});
+$ua->agent('Mozilla/5.0');
+is($ua->get('http://perl.com', Accept => 'text/html')->code, 200, 'Cache name specification');
+
+$ua->cachename_spec({
+	_headers => ['User-Agent'],
+	'User-Agent' => 'Internet-Explorer'
+});
+is($ua->get('http://perl.com', Accept => 'text/html')->code, 200, 'Cache name specification with _headers');
+
+$ua->cachename_spec({
+	_body => 'q=perl6&w=now',
+	'User-Agent' => 'Internet-Explorer',
+	'Content-Length' => 13,
+});
+is($ua->post('http://perl.com', ['q' => 'perl5', 'w' => 'yesterday'])->code, 200, 'Cache name specification with _body');
+
+$mid = $ua->map('http://pause.perl.org', HTTP::Response->new(200));
+$ua->cachename_spec({
+	_body => '',
+	_headers => []
+});
+$ua->post('http://pause.perl.org', [u => 'OLEG', act => 'login'], 'Accept' => 'text/html', 'Accept-Charset' => 'iso-8859');
+$ua->unmap($mid);
+$mid = $ua->map('http://pause.perl.org' => HTTP::Response->new(500));
+$ua->agent('Google/Chrome');
+is($ua->post('http://pause.perl.org', [u => 'UDGIN', act => 'logout'])->code, 200, 'Cache name based on url and http method');
 
 done_testing;
