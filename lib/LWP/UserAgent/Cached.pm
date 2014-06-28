@@ -6,7 +6,7 @@ use Digest::MD5;
 use HTTP::Response;
 use base 'LWP::UserAgent';
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 sub new {
 	my ($class, %opts) = @_;
@@ -16,7 +16,7 @@ sub new {
 	my $recache_if     = delete $opts{recache_if};
 	my $on_uncached    = delete $opts{on_uncached};
 	my $cachename_spec = delete $opts{cachename_spec};
-	my $self = $class->SUPER::new(%opts);
+	my $self = $class->SUPER::new(%opts, parse_head => 0);
 	
 	$self->{cache_dir}      = $cache_dir;
 	$self->{nocache_if}     = $nocache_if;
@@ -42,6 +42,16 @@ foreach my $opt_name (qw(cache_dir nocache_if recache_if on_uncached cachename_s
 	}
 }
 
+sub parse_head {
+	my ($self, $bool) = @_;
+	
+	if ($bool) {
+		die "parse_head() is disabled, because it may cause encoding troubles while saving cache";
+	}
+	
+	$self->SUPER::parse_head($bool);
+}
+
 sub simple_request {
 	my $self = shift;
 	unless (defined $self->{cache_dir}) {
@@ -53,6 +63,11 @@ sub simple_request {
 	my $fpath = $self->_get_cache_name($request);
 	my $response;
 	my $no_collision_suffix;
+	
+	unless ($self->{was_redirect}) {
+		@{$self->{last_cached}} = ();
+		@{$self->{last_used_cache}} = ();
+	}
 	
 	if (-e $fpath) {
 		unless ($response = $self->_parse_cached_response($fpath, $request)) {
@@ -96,18 +111,19 @@ sub simple_request {
 				print $fh $response->as_string;
 				close $fh;
 				
-				unless ($self->{was_redirect}) {
-					@{$self->{last_cached}} = ();
-				}
 				push @{$self->{last_cached}}, $fpath;
-				$self->{was_redirect} = $response->is_redirect && _in($request->method, $self->requests_redirectable);
+				push @{$self->{last_used_cache}}, $fpath;
 			}
 			else {
 				carp "open('$fpath', 'w'): $!";
 			}
 		}
 	}
+	else {
+		push @{$self->{last_used_cache}}, $fpath;
+	}
 	
+	$self->{was_redirect} = $response->is_redirect && _in($request->method, $self->requests_redirectable);
 	return $response;
 }
 
@@ -115,6 +131,12 @@ sub last_cached {
 	my $self = shift;
 	return exists $self->{last_cached} ?
 		@{$self->{last_cached}} : ();
+}
+
+sub last_used_cache {
+	my $self = shift;
+	return exists $self->{last_used_cache} ?
+		@{$self->{last_used_cache}} : ();
 }
 
 sub uncache {
@@ -360,6 +382,11 @@ Gets or sets corresponding option from the constructor.
 
 Returns list with pathes to files with cache stored by last noncached response. List may contain more than one
 element if there was redirect.
+
+=head2 last_used_cache()
+
+Returns list with pathes to files with cache used in last response. This includes files just stored (last_cached)
+and files that may be already exists (cached earlier). List may contain more than one element if there was redirect.
 
 =head2 uncache()
 
